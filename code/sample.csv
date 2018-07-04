@@ -1,0 +1,8 @@
+        Collection,  Reported,  Actual,    Votes
+        Bronx,       Yes,       Yes,         62
+        Bronx,       No,        No,          21
+        Bronx,       No,        Overvote,     1
+        Queens,      Yes,       Yes,        504
+        Queens,      No,        No,          99
+        Mail-In,     Yes,       Yes,         17       
+        Mail-In,     No,        No,          73
