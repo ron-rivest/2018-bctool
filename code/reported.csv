@@ -1,10 +1,8 @@
         Collection,  Reported,    Votes
         Bronx,       Yes,          8500    
         Bronx,       No,           2500
-        Bronx,       Overvote,        0
         Queens,      Yes,        100000
         Queens,      No,          20000
-        Queens,      Overvote,        0
         Mail-In,     Yes,          5990
         Mail-In,     No,          50000
         Mail-In,     Overvote,       10
