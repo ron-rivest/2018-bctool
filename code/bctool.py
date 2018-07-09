@@ -1,16 +1,17 @@
 # bctool.py
 # Authors: Ronald L. Rivest, Mayuri Sridhar, Zara A Perumal
-# July 7, 2018
+# July 9, 2018
 # python3
-# Comment: derived from github.com/ron-rivest/2018-bptool/bptool.py
+
 
 """
 This module provides support for auditing of a single plurality contest
 over multiple jurisdictions using a Bayesian ballot-level 
-comparison audit.
+comparison audit.  
 
 (See github.com/ron-rivest/2018-bptool/ for similar code for
-a Bayesian ballot-level polling audit.)
+a Bayesian ballot-level polling audit.  The code here was based
+in part on that code.)
 
 This module provides routines for computing the winning probabilities
 for various choices, given audit sample data.
@@ -23,20 +24,22 @@ sets of likely unsampled ballots, and report the probability that
 various choices win the contest.  (See References below for
 more details.)
 
-The main output of the program is thus report on the probability
+The main output of the program is this report on the probability
 that each choice wins, in these simulations.
 
-The election may be single-jurisdiction or multi-jurisdiction.  
+The contest may be single-jurisdiction or multi-jurisdiction.  
 More precisely, we assume that there are a number of "collections"
 of ballots that may be sampled.  Each relevant jurisdiction may
 have one or more such collections.  For example, a jurisdiction
 may be a county, with one collection for ballots submitted by
 mail, and one collection for ballots cast in-person.
 
+This module may be used for ballot-polling audits (where there
+no reported choices for ballots) or "hybrid" audits (where some
+collections have reported choices, and some don't).
 
-For command-line usage, there are really just one modes:
 
-To use this program, give a command like
+To use this program from the command line, give a command like
 
         python3 bctool.py collections.csv reported.csv sample.csv
 
@@ -49,10 +52,10 @@ To use this program, give a command like
                            installation framework that includes numpy.
 
         collections.csv    is the path to a file giving the number of (cast) votes 
-                           in each collection
+                           in each collection.
 
         reported.csv       is the path to a file giving the reported number of 
-                           votes for each choice in each collection
+                           votes for each choice in each collection.
 
         sample.csv         is the path to a file giving the number of 
 
@@ -64,29 +67,30 @@ To use this program, give a command like
                            choice revealed by a manual examination of the ballot.
                             
 
-FILE FORMATS are as follows; all are CSV files with one header line, then data lines.
+FILE FORMATS are as follows; all are CSV files with one header line, then 
+a number of data lines.
 
 
 COLLECTIONS.CSV format:
 
-    Example:
+    Example collections.csv file:
 
         Collection,      Votes,      Comment
         Bronx,           11000
         Queens,         120000
         Mail-In,         56000
 
-    with one header line, as shown, 
-    then one data line for each collection of paper ballots 
-    that may be sampled; each data line gives the name of 
-    the collection and then the number of votes in that
-    collection (that is, the number of paper ballots in the
-    collection). An additional column for comments is provided.
+    with one header line, as shown, then one data line for 
+    each collection of paper ballots that may be sampled.
+    Each data line gives the name of the collection and 
+    then the number of votes in that collection 
+    (that is, the number of paper ballots in the collection). 
+    An additional column for optional comments is provided.
 
 
 REPORTED.CSV format
 
-    Example:
+    Example reported.csv file:
 
         Collection,  Reported,    Votes,       Comment
         Bronx,       Yes,          8500    
@@ -97,22 +101,28 @@ REPORTED.CSV format
         Mail-In,     No,          50000
         Mail-In,     Overvote,       10
 
-    with one header line, as shown,
-    then one data line for each collection and each reported choice
-    in that collection, giving the number such reported choice is reported
-    to have appeared.  An additional column for comments is
+    with one header line, as shown, then one data line for each 
+    collection and each reported choice in that collection, 
+    giving the number of times such reported choice is reported
+    to have appeared.  An additional column for optional comments is
     provided.
     
     A reported choice need not be listed, if it occurred zero times,
     although every possible choice (except write-ins) should be listed 
-    at least once, so that this program knows what the possible votes 
-    are for this contest.
+    at least once for some contest, so that this program knows what the 
+    possible votes are for this contest.
 
-    For each collection, the sum of the Votes given should sum to the Votes
-    value given in the corresponding line in the collections.csv file.
+    For each collection, the sum, over reported choices,  of the Votes given 
+    should equal the Votes value given in the corresponding line in 
+    the collections.csv file.
 
     Write-ins may be specified as desired, perhaps with a string
     such as "Write-in:Alice Jones".
+
+    For ballot-polling audits, use a reported choice of "-MISSING" 
+    or "-noCVR" or any identifier starting with a "-".  (Tagging
+    the identifier with an initial "-" prevents it from becoming
+    elegible for winning the contest.)
 
 
 SAMPLE.CSV format:
@@ -146,7 +156,7 @@ SAMPLE.CSV format:
     People".)
 
     The lines of this file do not need to be in any particular order.
-    (So, you can add more lines to the end of this file as the audit
+    You can just add more lines to the end of this file as the audit
     progresses, if you like.
 
     The Reported choices must have appeared in
@@ -171,23 +181,29 @@ SAMPLE.CSV format:
 
 
 There are optional parameters as well, to see their documentation, give command
+
     python bctool.py --h
 
 Like github.com/ron-rivest/audit-lab, the Bayesian model defaults 
 to using a prior pseudocount of 
-    "+1"   for each matrix tally cell entry (R, A) if R != A
-    "+50"  for each matrix tally cell entry (R, A) if R == A
-for each pair of choices R, A (reported, actual).
+
+    +1   for each (reported, actual) pair of choices (R, A) where R != A
+
+    +50  for the (reported, actual) pair (R, A) of choices where R == A
 
 This module can be used for ballot-polling audits too, if all
-reported votes are set to "MISSING" (or some other value that
-doesn't otherwise occur as an actual choice).
+reported votes are set to "-MISSING" (or some other value that
+starts with an initial "-").
+
 
 If this module is imported by another python module, 
 rather than used stand-alone from the command line, then the procedure
+
     compute_win_probs
+
 can compute the desired probability of each choice winning a full 
 manual tally, given the sample tallies for each collection.
+
 
 More description of Bayesian auditing methods can be found in:
 
@@ -220,7 +236,9 @@ import numpy as np
 ## Some global variables
 ##############################################################################
 
-# Bayes prior hyperparameters; constants for now; allow CLI setting later
+# Bayes prior hyperparameters (pseudocounts)
+# These are constants for now; perhaps allow setting via CLI later
+
 PSEUDOCOUNT_BASE = 1
 PSEUDOCOUNT_MATCH = 50
 
@@ -232,7 +250,7 @@ PSEUDOCOUNT_MATCH = 50
 
 def duplicates(L):
     """
-    Return duplicates occurring in a list L.
+    Return a list of the duplicates occurring in a given list L.
 
     If there are no duplicates, return empty list.
     """
@@ -280,20 +298,21 @@ def convert_int_to_32_bit_numpy_array(v):
 
     Input Parameters:
 
-    -v is an integer, representing the audit seed that's being
-    passed in. We expect v to be non-negative.
+        v         -- an integer, representing the audit seed that's being
+                     passed in. We expect v to be non-negative.
 
     Returns:
 
-    -numpy array created deterministically from v that will
-    be used to initialize the Numpy RandomState.
+        numpy array  -- created deterministically from v that will
+                        be used to initialize the Numpy RandomState.
     """
 
     v = int(v)
     if v < 0:
         raise ValueError(("convert_int_to_32_bit_numpy_array: "
                           "{} is not a nonnegative integer, "
-                          "or convertible to one.").format(v))
+                          "or convertible to one.")
+                         .format(v))
     v_parts = []
     radix = 2 ** 32
     while v > 0:
@@ -311,13 +330,14 @@ def create_rs(seed):
 
     Input Parameters:
 
-    -seed is an integer or None. Assuming that it isn't None, we
-    convert it into a Numpy Array.
+        seed              -- an integer or None. 
+                             Assuming that it isn't None, we
+                             convert it into a Numpy Array.
 
     Returns:
 
-    -a Numpy RandomState object, based on the seed, or the clock
-    time if the seed is None.
+        a Numpy RandomState object  --  based on the seed, or the clock
+                                        time if the seed is None.
     """
 
     if seed is not None:
@@ -338,7 +358,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description=\
                                      'Bayesian Comparison Audit Process For'
                                      'A Single Contest '
-                                     'Across One or More Counties')
+                                     'Across Multiple Jurisdictions or Collections')
+
+    ## REQUIRED POSITIONAL COMMAND-LINE ARGUMENTS
 
     parser.add_argument("collections_file",
                         help="path to CSV file giving collection names and sizes.",
@@ -355,6 +377,8 @@ def parse_args():
                              "each collection in the audit sample.",
                         default = "sample.csv")
 
+    ## OPTIONAL COMMAND-LINE ARGUMENTS
+
     parser.add_argument("--audit_seed",
                         help="For reproducibility, we provide the option to "
                              "seed the randomness in the audit. If the same "
@@ -364,14 +388,14 @@ def parse_args():
                         default=1)
 
     parser.add_argument("--num_trials",
-                        help="Bayesian audits work by simulating the data "
-                             "which hasn't been sampled to estimate the "
-                             "chance that each candidate would win a full "
+                        help="Bayesian audits work by simulating the ballots "
+                             "that haven't been sampled to estimate the "
+                             "chance that each choice would win a full "
                              "hand recount. This argument specifies how "
-                             "many trials are done to compute these "
+                             "many trials are used to compute these "
                              "estimates.",
                         type=int,
-                        default=10000)
+                        default=25000)
 
     parser.add_argument("--n_winners",
                         help="The parameter n_winners determines how many "
@@ -379,6 +403,11 @@ def parse_args():
                         "vote getters win the contest.",
                         type=int,
                         default=1)
+
+    parser.add_argument("--v",
+                        help="Verbose output.",
+                        action='store_true'
+                        )
 
     args = parser.parse_args()
 
@@ -398,11 +427,6 @@ def read_csv(path_to_csv, expected_fieldnames):
     Values are converted to type "int" whenever possible.
     Checks that field names are exactly as expected.
     """
-
-    printing_wanted = True
-    if printing_wanted:
-        print()
-        print("Reading csv file: ", path_to_csv)
 
     with open(path_to_csv) as csv_file:
     
@@ -432,8 +456,6 @@ def read_csv(path_to_csv, expected_fieldnames):
                 val = convert_to_int_if_possible(val)
                 new_name = name.strip().lower()
                 new_row[new_name] = val
-            if printing_wanted:
-                print(new_row)
             rows.append(new_row)
 
         return rows
@@ -444,11 +466,14 @@ def read_and_process_collections(path_to_collections_file):
     Return list of collection names and dict mapping names to sizes.
 
     Input: 
+
         path_to_collections_file     -- (string) path to collections.csv file
 
     Output:
-        collection_names: list of all collection names
-        collection_size: dict mapping collection names to sizes
+
+        collection_names             -- list of all collection names
+
+        collection_size              -- dict mapping collection names to sizes
 
     """
     
@@ -479,9 +504,9 @@ def read_and_process_reported(path_to_reported_file,
     Read and process file for reported vote totals.
 
     Input:
-        path_to_reported_file   -- (string) path to reported.csv file
-        collection_names        -- list of all collection names
-        collection_size         -- mapping: collection_name -> size (number of votes cast)
+        path_to_reported_file    -- (string) path to reported.csv file
+        collection_names         -- list of all collection names
+        collection_size          -- mapping: collection_name -> size (number of votes cast)
         path_to_collections_file -- (string) path to collections.csv file
 
     Returns:
@@ -503,8 +528,6 @@ def read_and_process_reported(path_to_reported_file,
             reported_choices.append(reported_choice)
     reported_choices = sorted(reported_choices)
     
-    print("reported_choices:", reported_choices)
-
     # Initialize reported_size
     # for all collections, reported choices, set to zero
     reported_size = dict()
@@ -517,12 +540,11 @@ def read_and_process_reported(path_to_reported_file,
     for row in reported_rows:
         collection_name = row['collection']
         if collection_name not in reported_size:
-            print("{} has illegal collection name: {} (IGNORED)"
+            print("ERROR: {} has illegal collection name: {} (IGNORED)"
                   .format(path_to_reported_file, collection_name))
             continue
         reported_choice = row['reported']
-        collection_dict = reported_size[collection_name]
-        collection_dict[reported_choice] = row['votes']
+        reported_size[collection_name][reported_choice] = row['votes']
 
     # Check that total number of reported votes in each collection is
     # equal to sum over reported choices of number of votes for that
@@ -530,7 +552,6 @@ def read_and_process_reported(path_to_reported_file,
     for collection_name in collection_names:
         n_reported = sum([reported_size[collection_name][reported_choice]
                           for reported_choice in reported_size[collection_name]])
-        print(collection_name, collection_size)
         if n_reported != collection_size[collection_name]:
             print("Collection '{}' has inconsistent reported vote counts:\n" 
                   "  {} over all reported choices (from {}), but\n" 
@@ -559,8 +580,9 @@ def read_and_process_sample(path_to_sample_file, collection_names, reported_choi
 
     Return:
 
-        all_choices = list of all actual choices, plus all reported choices,
-                      sorted into in alphabetical order
+        actual_choices = list of all actual choices, plus all reported choices
+                         (ones that don't start with an initial "-"),
+                         sorted into in alphabetical order
 
         sample_dict: mapping
             collection_name -> reported_choice -> actual_choice -> votes
@@ -571,12 +593,12 @@ def read_and_process_sample(path_to_sample_file, collection_names, reported_choi
                             'comment'])
 
     # collect all actual choices (including reported choices)
-    all_choices = reported_choices.copy()
+    actual_choices = [choice for choice in reported_choices if choice[0]!='-']
     for row in sample_rows:
         actual_choice = row['actual']
-        if actual_choice not in all_choices:
-            all_choices.append(actual_choice)
-    all_choices = sorted(all_choices)
+        if actual_choice not in actual_choices:
+            actual_choices.append(actual_choice)
+    actual_choices = sorted(actual_choices)
 
     # Initialize sample dict
     # for all possible collection, reported_choice, actual choice triples
@@ -586,7 +608,7 @@ def read_and_process_sample(path_to_sample_file, collection_names, reported_choi
         sample_dict[collection] = dict()
         for reported_choice in reported_choices:
             sample_dict[collection][reported_choice] = dict()
-            for actual_choice in all_choices:
+            for actual_choice in actual_choices:
                 sample_dict[collection][reported_choice][actual_choice] = 0
 
     for row in sample_rows:
@@ -599,9 +621,7 @@ def read_and_process_sample(path_to_sample_file, collection_names, reported_choi
         actual_choice = row['actual']
         reported_dict[actual_choice] += row['votes']  # add, not replace
 
-    print("all choices:", all_choices)
-
-    return all_choices, sample_dict
+    return actual_choices, sample_dict, sample_rows
 
 
 ##############################################################################
@@ -624,7 +644,7 @@ def dirichlet_multinomial(
          stratum_sample_tally  -- a list of integers, where the i'th element 
                                   is the number of votes that choice i received 
                                   in the sample.
-                                  (Here i indexes into all_choices.)
+                                  (Here i indexes into actual_choices.)
 
          stratum_pseudocounts -- a list of integers of exactly the same length
                                  as stratum_sample_tally, giving as the i-th
@@ -687,7 +707,7 @@ def generate_restored_sample_tally(stratum_sample_tally,
          stratum_sample_tally  -- a list of integers, where the i'th index in
                                   sample_tally corresponds to the number of 
                                   votes that choice i received in the sample.
-                                  (Here i indexes into all_choices.)
+                                  (Here i indexes into actual_choices.)
 
          stratum_pseudocounts -- a list of integers of exactly the same length
                                  as stratum_sample_tally, giving as the i-th
@@ -724,7 +744,7 @@ def compute_winner(strata_sample_tallies,
                    strata_pseudocounts,
                    total_num_votes,
                    seed,
-                   all_choices,
+                   actual_choices,
                    n_winners,
                    pretty_print=False):
     """
@@ -775,7 +795,7 @@ def compute_winner(strata_sample_tallies,
                                     choice that won the contest.
     """
 
-    final_tallies = np.zeros(len(all_choices))
+    final_tallies = np.zeros(len(actual_choices))
     for i in range(len(strata_sample_tallies)):
         stratum_sample_tally = strata_sample_tallies[i]
         stratum_pseudocounts = strata_pseudocounts[i]
@@ -811,7 +831,7 @@ def compute_win_probs(strata_sample_tallies,
                       total_num_votes,
                       seed,
                       num_trials,
-                      all_choices,
+                      actual_choices,
                       n_winners):
     """
 
@@ -847,7 +867,7 @@ def compute_win_probs(strata_sample_tallies,
                                   of the Bayesian audit trial we run, to estimate 
                                   the win probabilities of the candidates.
 
-        all_choices            -- an ordered list of strings, containing 
+        actual_choices         -- an ordered list of strings, containing 
                                   the name of every choice in the contest we are 
                                   auditing.
 
@@ -867,7 +887,7 @@ def compute_win_probs(strata_sample_tallies,
                                   out of the num_trials simulations.
     """
 
-    win_count = np.zeros(1+len(all_choices))
+    win_count = np.zeros(1+len(actual_choices))
     for i in range(num_trials):
         # We want a different seed per trial.
         # Adding i to seed caused correlations, as numpy apparently
@@ -877,7 +897,7 @@ def compute_win_probs(strata_sample_tallies,
                                  strata_pseudocounts,
                                  total_num_votes,
                                  seed_i,
-                                 all_choices,
+                                 actual_choices,
                                  n_winners
                                 )
         for winner in winners:
@@ -891,14 +911,14 @@ def compute_win_probs(strata_sample_tallies,
 ## Output routines
 ##############################################################################
 
-def print_results(all_choices, win_probs, n_winners):
+def print_results(actual_choices, win_probs, n_winners):
     """
     Given list of all choices and win_probs pairs, print summary
     of the Bayesian audit simulations.
 
     Input Parameters:
 
-        all_choices                 -- an ordered list of strings, 
+        actual_choices              -- an ordered list of strings, 
                                        containing the name of every choice
                                        reported or seen in the contest 
                                        we are auditing.
@@ -938,12 +958,12 @@ def print_results(all_choices, win_probs, n_winners):
     else:
         print("{:<24s} \t {:<s} {} {:<s}"
               .format("Choice        ",
-                      "Estimated probability of being among the top {} ",
-                      "winners in a full recount"
-                      .format(n_winners)))
+                      "Estimated probability of being among the top ",
+                      n_winners,
+                      "winners in a full recount"))
 
     for choice_index, prob in sorted_win_probs:
-        choice_name = str(all_choices[choice_index - 1])
+        choice_name = str(actual_choices[choice_index - 1])
         print(" {:<24s} \t  {:6.2f} %  "
               .format(choice_name, 100*prob))
 
@@ -956,17 +976,42 @@ def main():
 
     args = parse_args()
 
+    if args.v:
+        print("Reading collections file: ", args.collections_file)
+
     collection_names, collection_size, collections_rows = \
         read_and_process_collections(args.collections_file)
+
+    if args.v:
+        print("Collection names: ", collection_names)
+        for row in collections_rows:
+            print("    ", row)
+
+    if args.v:
+        print("Reading reported choice tally file: ", args.reported_file)
 
     reported_choices, reported_size, reported_rows = \
         read_and_process_reported(args.reported_file,
                                   collection_names,
                                   collection_size,
                                   args.collections_file)
+
+    if args.v:
+        print("Reported choices: ", reported_choices)
+        for row in reported_rows:
+            print("    ", row)
+
     
-    all_choices, sample_dict = \
+    if args.v:
+        print("Reading sample audit data file: ", args.sample_file)
+
+    actual_choices, sample_dict, sample_rows = \
         read_and_process_sample(args.sample_file, collection_names, reported_choices)
+
+    if args.v:
+        print("All reported choices and choices seen in audit: ", actual_choices)
+        for row in sample_rows:
+            print("    ", row)
 
     # Stratify by (collection, choice) pairs
     strata = []                 # list of (collection, reported_choice) pairs
@@ -984,7 +1029,7 @@ def main():
     for (collection, reported_choice) in strata:
         stratum_sample_tally = []
         stratum_pseudocounts = []
-        for actual_choice in all_choices:
+        for actual_choice in actual_choices:
             count = sample_dict[collection][reported_choice][actual_choice]
             stratum_sample_tally.append(count)
             if reported_choice == actual_choice:
@@ -993,7 +1038,7 @@ def main():
                 stratum_pseudocounts.append(PSEUDOCOUNT_BASE)
         strata_sample_tallies.append(np.array(stratum_sample_tally))
         strata_pseudocounts.append(np.array(stratum_pseudocounts))
-        print(collection, reported_choice, stratum_sample_tally, stratum_pseudocounts)
+        # print(collection, reported_choice, stratum_sample_tally, stratum_pseudocounts)
 
     win_probs = compute_win_probs(\
                     strata_sample_tallies,
@@ -1001,11 +1046,11 @@ def main():
                     strata_size,
                     args.audit_seed,
                     args.num_trials,
-                    all_choices,
+                    actual_choices,
                     args.n_winners
                  )
 
-    print_results(all_choices, win_probs, args.n_winners)
+    print_results(actual_choices, win_probs, args.n_winners)
 
 
 if __name__ == '__main__':
