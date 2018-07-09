@@ -610,7 +610,7 @@ def read_and_process_sample(path_to_sample_file, collection_names, reported_choi
 
 def dirichlet_multinomial(
         stratum_sample_tally,
-        stratum_prior,
+        stratum_pseudocounts,
         stratum_size,
         rs,
         ):
@@ -665,59 +665,66 @@ def dirichlet_multinomial(
     gamma_sample_sum = float(sum(gamma_sample))
     gamma_sample = [k / gamma_sample_sum for k in gamma_sample]
 
-    multinomial_sample = rs.multinomial(nonsample_size, gamma_sample)
+    multinomial_sample_tally = rs.multinomial(nonsample_size, gamma_sample)
+    
+    # print("stratum_sample_tally:", stratum_sample_tally)
+    # print("stratum_pseudocounts:", stratum_pseudocounts)
+    # print(multinomial_sample_tally)
+    return multinomial_sample_tally + stratum_sample_tally
 
-    return multinomial_sample
 
-
-def generate_nonsample_tally(stratum_sample_tally,
-                             stratum_prior,
-                             stratum_size,
-                             seed):
+def generate_restored_sample_tally(stratum_sample_tally,
+                                   stratum_pseudocounts,
+                                   stratum_size,
+                                   seed):
     """
-    Given a stratum_sample_tally, a stratum_prior, the stratum_size, and a seed,
-    generate a nonsample tally in the contest using the Dirichlet multinomial
-    distribution.
+    Given a stratum_sample_tally, a stratum_prior (expressed as pseudocounts), 
+    the stratum_size, and a seed,  generate a restored_sample_tally in the contest 
+    using the Dirichlet multinomial distribution.
 
     Input Parameters:
 
-         stratum_sample_tally -- a list of integers, where the i'th index in
-                                 sample_tally corresponds to the number of 
-                                 votes that choice i received in the sample.
-                                 (Here i indexes into all_choices.)
+         stratum_sample_tally  -- a list of integers, where the i'th index in
+                                  sample_tally corresponds to the number of 
+                                  votes that choice i received in the sample.
+                                  (Here i indexes into all_choices.)
 
-         stratum_prior       -- a list of integers of exactly the same length
-                                as stratum_sample_tally, giving as the i-th
-                                element the Bayesian pseudocount for the i-th
-                                choices, as a way of defining the prior.
+         stratum_pseudocounts -- a list of integers of exactly the same length
+                                 as stratum_sample_tally, giving as the i-th
+                                 element the Bayesian pseudocount for the i-th
+                                 choices, as a way of defining the prior.
 
-         stratum size        -- an integer equal to the number of
-                                votes cast in this contest in this stratum.
+         stratum size         -- an integer equal to the number of
+                                 votes cast in this contest in this stratum.
 
 
-         seed                -- an integer or None. Assuming that it isn't 
-                                None, we use it to seed the random state 
-                                for the audit.
+         seed                 -- an integer or None. Assuming that it isn't 
+                                 None, we use it to seed the random state 
+                                 for the audit.
 
     Returns:
 
-        nonsample_tally          -- a list of integers, which sums up
-                                    to (total_num_votes - sample_size). 
-                                    The i'th index represents the simulated 
-                                    number of votes for choice i in the 
-                                    remaining, unsampled votes.
+        restored_sample_tally -- a list of integers, which sums up
+                                 to  total_num_votes .
+                                 The i'th index represents the simulated 
+                                 number of votes for choice i in the 
+                                 "restored sample".
     """
 
     rs = create_rs(seed)
-    nonsample_tally = dirichlet_multinomial(
-        sample_tally, total_num_votes, rs, pseudocount_for_prior)
-    return nonsample_tally
+    restored_sample_tally = \
+        dirichlet_multinomial(stratum_sample_tally,
+                              stratum_pseudocounts,
+                              stratum_size,
+                              rs)
+    return restored_sample_tally
 
 
 def compute_winner(strata_sample_tallies,
                    strata_pseudocounts,
                    total_num_votes,
                    seed,
+                   all_choices,
                    n_winners,
                    pretty_print=False):
     """
@@ -726,7 +733,7 @@ def compute_winner(strata_sample_tallies,
     and a random seed (an integer)
     compute the winner in a single simulation.
     For each collection, we use the Dirichlet-Multinomial distribution to generate
-    a nonsample tally. Then, we sum over all the collections to produce our
+    a restored_sample_tally. Then, we sum over all the collections to produce our
     final tally and calculate the predicted winner(s) over all the collections in
     the contest.
 
@@ -773,12 +780,12 @@ def compute_winner(strata_sample_tallies,
         stratum_sample_tally = strata_sample_tallies[i]
         stratum_pseudocounts = strata_pseudocounts[i]
         stratum_size = total_num_votes[i]
-        nonsample_tally = generate_nonsample_tally(
+        restored_sample_tally = generate_restored_sample_tally(
             stratum_sample_tally,
             stratum_pseudocounts,
             stratum_size,
             seed)
-        final_collection_tally = sample_tally + nonsample_tally
+        final_collection_tally = restored_sample_tally
         final_tallies = final_tallies + final_collection_tally
     final_tallies = [(k, final_tallies[k]) for k in range(len(final_tallies))]
     final_tallies.sort(key = lambda x: x[1])
@@ -870,6 +877,7 @@ def compute_win_probs(strata_sample_tallies,
                                  strata_pseudocounts,
                                  total_num_votes,
                                  seed_i,
+                                 all_choices,
                                  n_winners
                                 )
         for winner in winners:
@@ -983,12 +991,13 @@ def main():
                 stratum_pseudocounts.append(PSEUDOCOUNT_MATCH)
             else:
                 stratum_pseudocounts.append(PSEUDOCOUNT_BASE)
-        strata_sample_tallies.append(stratum_sample_tally)
-        strata_pseudocounts.append(stratum_pseudocounts)
+        strata_sample_tallies.append(np.array(stratum_sample_tally))
+        strata_pseudocounts.append(np.array(stratum_pseudocounts))
         print(collection, reported_choice, stratum_sample_tally, stratum_pseudocounts)
 
     win_probs = compute_win_probs(\
                     strata_sample_tallies,
+                    strata_pseudocounts,
                     strata_size,
                     args.audit_seed,
                     args.num_trials,
