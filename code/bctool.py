@@ -1,10 +1,11 @@
 # bctool.py
 # Authors: Ronald L. Rivest, Mayuri Sridhar, Zara A Perumal
-# July 5, 2018
+# July 7, 2018
 # python3
 # Comment: derived from github.com/ron-rivest/2018-bptool/bptool.py
 
-"""This module provides support for auditing of a single plurality contest
+"""
+This module provides support for auditing of a single plurality contest
 over multiple jurisdictions using a Bayesian ballot-level 
 comparison audit.
 
@@ -70,7 +71,7 @@ COLLECTIONS.CSV format:
 
     Example:
 
-        Collection,      Votes
+        Collection,      Votes,      Comment
         Bronx,           11000
         Queens,         120000
         Mail-In,         56000
@@ -80,14 +81,14 @@ COLLECTIONS.CSV format:
     that may be sampled; each data line gives the name of 
     the collection and then the number of votes in that
     collection (that is, the number of paper ballots in the
-    collection).
+    collection). An additional column for comments is provided.
 
 
 REPORTED.CSV format
 
     Example:
 
-        Collection,  Reported,    Votes
+        Collection,  Reported,    Votes,       Comment
         Bronx,       Yes,          8500    
         Bronx,       No,           2500
         Queens,      Yes,        100000
@@ -99,9 +100,13 @@ REPORTED.CSV format
     with one header line, as shown,
     then one data line for each collection and each reported choice
     in that collection, giving the number such reported choice is reported
-    to have appeared.
+    to have appeared.  An additional column for comments is
+    provided.
     
-    A reported choice need not be listed, if it occurred zero times.
+    A reported choice need not be listed, if it occurred zero times,
+    although every possible choice (except write-ins) should be listed 
+    at least once, so that this program knows what the possible votes 
+    are for this contest.
 
     For each collection, the sum of the Votes given should sum to the Votes
     value given in the corresponding line in the collections.csv file.
@@ -114,7 +119,7 @@ SAMPLE.CSV format:
 
     Example:
 
-        Collection,  Reported,  Actual,    Votes
+        Collection,  Reported,  Actual,    Votes,       Comment
         Bronx,       Yes,       Yes,         62
         Bronx,       No,        No,          21
         Bronx,       No,        Overvote,     1
@@ -128,7 +133,8 @@ SAMPLE.CSV format:
     with one header line, as shown then at least one data line for
     each collection for each reported/actual choice pair that was seen
     in the audit sample at least once, giving the number of times it
-    was seen in the sample.
+    was seen in the sample.  An additional column for comments is
+    provided.
 
     There is no need to give a data line for a reported/actual pair
     that wasn't seen in the sample.
@@ -367,13 +373,10 @@ def parse_args():
                         type=int,
                         default=10000)
 
-    parser.add_argument("--vote_for_n",
-                        help="If we want to simulate voting for multiple "
-                        "candidates at a time, we can use this parameter "
-                        "to specify how many candidates a single voter "
-                        "can vote for. The simulations will then count a candidate"
-                        "as a winner, each time they appear in the top N "
-                        "of the candidates, in the simulated elections.",
+    parser.add_argument("--n_winners",
+                        help="The parameter n_winners determines how many "
+                        "winners there are in a contest.  The top n_winners "
+                        "vote getters win the contest.",
                         type=int,
                         default=1)
 
@@ -409,13 +412,23 @@ def read_csv(path_to_csv, expected_fieldnames):
         # make lower case
         reader.fieldnames = [x.strip().lower() for x in reader.fieldnames]
 
-        assert set(reader.fieldnames) == set(expected_fieldnames)
+        if set(reader.fieldnames) != set(expected_fieldnames):
+            print("Error: in file {}, the fieldnames found \n"
+                  "  {}\n"
+                  "are not equal to those expected:\n"
+                  "  {}"
+                  .format(path_to_csv, reader.fieldnames, expected_fieldnames)
+                  )
+            sys.exit()
 
         rows = []
         for row in reader:        
             new_row = dict()
             for name in reader.fieldnames:
-                val = row[name].strip()
+                if row[name] == None:
+                    val = ""
+                else:
+                    val = row[name].strip()
                 val = convert_to_int_if_possible(val)
                 new_name = name.strip().lower()
                 new_row[new_name] = val
@@ -440,7 +453,7 @@ def read_and_process_collections(path_to_collections_file):
     """
     
     collections_rows = read_csv(path_to_collections_file,
-                                ['collection', 'votes'])
+                                ['collection', 'votes', 'comment'])
 
     collection_names = list([row['collection'] for row in collections_rows])
 
@@ -479,7 +492,8 @@ def read_and_process_reported(path_to_reported_file,
     """
 
     reported_rows = read_csv(path_to_reported_file,
-                             ['collection', 'reported', 'votes'])
+                             ['collection', 'reported', 'votes',
+                              'comment'])
 
     # Collect all reported choices
     reported_choices = list()
@@ -553,7 +567,8 @@ def read_and_process_sample(path_to_sample_file, collection_names, reported_choi
     """
 
     sample_rows = read_csv(path_to_sample_file,
-                           ['collection', 'reported', 'actual', 'votes'])
+                           ['collection', 'reported', 'actual', 'votes',
+                            'comment'])
 
     # collect all actual choices (including reported choices)
     all_choices = reported_choices.copy()
@@ -594,57 +609,59 @@ def read_and_process_sample(path_to_sample_file, collection_names, reported_choi
 ##############################################################################
 
 def dirichlet_multinomial(
-    sample_tally, total_num_votes, rs, pseudocount_for_prior):
+        stratum_sample_tally,
+        stratum_prior,
+        stratum_size,
+        rs,
+        ):
     """
-    Return a sample according to the Dirichlet multinomial
-    distribution, given a sample tally, the number of votes in the
-    election, and a random state. There is an additional pseudocount
-    of one vote (PSEUDOCOUNT_BASE, pseudocount_for_prior) per choice
-    in this simulation.
+    Return a stratum tally according to the Dirichlet multinomial
+    distribution, given a stratum_sample_tally, the number of votes cast
+    in the stratum, and a random state. 
 
     Input Parameters:
 
-        sample_tally         -- a list of integers, where the i'th index in
-                                sample_tally corresponds to the number of 
-                                votes that choice i received in the sample.
+         stratum_sample_tally  -- a list of integers, where the i'th element 
+                                  is the number of votes that choice i received 
+                                  in the sample.
+                                  (Here i indexes into all_choices.)
 
-         total_num_votes     -- an integer representing the number of
-                                ballots that were cast in this election.
+         stratum_pseudocounts -- a list of integers of exactly the same length
+                                 as stratum_sample_tally, giving as the i-th
+                                 element the Bayesian pseudocount for the i-th
+                                 choices, as a way of defining the prior.
 
-         rs                  -- a Numpy RandomState object that is used for any
-                                random functions in the simulation of the 
-                                nonsample votes. In particular,
-                                the gamma functions are made deterministic 
-                                using this state.
+         stratum size         -- an integer equal to the number of
+                                 votes cast in this contest in this stratum.
 
-        -pseudocount_for_prior   -- an integer, defining how many votes we add
-                                    in by default, for each choice, as a prior. 
-                                    The default of 1 gives a uniform prior over 
-                                    all the choices that they each automatically
-                                    receive 1 vote.
+         rs                   -- a Numpy RandomState object that is used for any
+                                 random functions in the simulation of the 
+                                 nonsample votes. In particular,
+                                 the gamma functions are made deterministic 
+                                 using this state.
 
     Returns:
 
-        -multinomial_sample      -- a list of integers, which sums up
-                                    to (total_num_votes - sample_size). 
-                                    The i'th index represents the
+        multinomial_sample       -- a list of integers, which sums up
+                                    to (stratum_size - stratum_sample_size). 
+                                    The i'th element is equal to the
                                     simulated number of votes for choice i in 
                                     the remaining, unsampled votes.
 
     """
 
-    sample_size = sum(sample_tally)
-    if sample_size > total_num_votes:
-        raise ValueError("total_num_votes {} less than sample_size {}."
-                         .format(total_num_votes, sample_size))
+    stratum_sample_size = sum(stratum_sample_tally)
 
-    nonsample_size = total_num_votes - sample_size
+    if stratum_sample_size > stratum_size:
+        raise ValueError("stratum_size {} less than stratum_sample_size {}."
+                         .format(stratum_size, stratum_sample_size))
 
-    sample_with_prior = deepcopy(sample_tally)
-    sample_with_prior = [k + pseudocount_for_prior
-                         for k in sample_with_prior]
+    nonsample_size = stratum_size - stratum_sample_size
 
-    gamma_sample = [rs.gamma(k) for k in sample_with_prior]
+    stratum_sample_tally_plus_pseudocounts = \
+        stratum_sample_tally + stratum_pseudocounts
+
+    gamma_sample = [rs.gamma(k) for k in stratum_sample_tally_plus_pseudocounts]
     gamma_sample_sum = float(sum(gamma_sample))
     gamma_sample = [k / gamma_sample_sum for k in gamma_sample]
 
@@ -653,32 +670,34 @@ def dirichlet_multinomial(
     return multinomial_sample
 
 
-def generate_nonsample_tally(
-    sample_tally, total_num_votes, seed, pseudocount_for_prior):
+def generate_nonsample_tally(stratum_sample_tally,
+                             stratum_prior,
+                             stratum_size,
+                             seed):
     """
-    Given a sample_tally, the total number of votes in an election, and a seed,
-    generate the nonsample tally in the election using the Dirichlet multinomial
+    Given a stratum_sample_tally, a stratum_prior, the stratum_size, and a seed,
+    generate a nonsample tally in the contest using the Dirichlet multinomial
     distribution.
 
     Input Parameters:
 
-        sample_tally             -- a list of integers, where 
-                                    the i'th index in sample_tally corresponds 
-                                    to the number of votes that choice i received 
-                                    in the sample.
+         stratum_sample_tally -- a list of integers, where the i'th index in
+                                 sample_tally corresponds to the number of 
+                                 votes that choice i received in the sample.
+                                 (Here i indexes into all_choices.)
 
-        total_num_votes          -- an integer equal to the number of
-                                    ballots that were cast in this election.
+         stratum_prior       -- a list of integers of exactly the same length
+                                as stratum_sample_tally, giving as the i-th
+                                element the Bayesian pseudocount for the i-th
+                                choices, as a way of defining the prior.
 
-        seed                     -- an integer or None. Assuming that it isn't 
-                                    None, we use it to seed the random state 
-                                    for the audit.
+         stratum size        -- an integer equal to the number of
+                                votes cast in this contest in this stratum.
 
-        pseudocount_for_prior    -- an integer, defining how many votes we add
-                                    in by default, for each choice, as a prior. 
-                                    The default of 1 gives a uniform prior over all 
-                                    the choices that they each automatically receive 
-                                    1 vote.
+
+         seed                -- an integer or None. Assuming that it isn't 
+                                None, we use it to seed the random state 
+                                for the audit.
 
     Returns:
 
@@ -695,95 +714,98 @@ def generate_nonsample_tally(
     return nonsample_tally
 
 
-def compute_winner(sample_tallies, total_num_votes, vote_for_n,
-                   seed, pseudocount_for_prior, pretty_print=False):
+def compute_winner(strata_sample_tallies,
+                   strata_pseudocounts,
+                   total_num_votes,
+                   seed,
+                   n_winners,
+                   pretty_print=False):
     """
     Given a list of sample tallies (one sample tally per collection)
     a list giving the total number of votes cast in each collection,
     and a random seed (an integer)
     compute the winner in a single simulation.
     For each collection, we use the Dirichlet-Multinomial distribution to generate
-    a nonsample tally. Then, we sum over all the counties to produce our
-    final tally and calculate the predicted winner over all the counties in
-    the election.
+    a nonsample tally. Then, we sum over all the collections to produce our
+    final tally and calculate the predicted winner(s) over all the collections in
+    the contest.
 
     Input Parameters:
 
-        sample_tallies           -- a list of lists. Each list represents 
-                                    the sample tally
-                                    for a given collection. So, sample_tallies[i] 
-                                    represents the tally for collection i. 
-                                    Then, sample_tallies[i][j] represents the 
-                                    number of votes choice j receives in collection i.
+        strata_sample_tallies    -- a list of lists. Each list is 
+                                    a stratum sample tally.
+                                    So, strata_sample_tallies[i] 
+                                    represents the stratum tally for stratum i. 
+                                    Then, strata_sample_tallies[i][j] represents the 
+                                    number of votes choice j receives in stratum i.
 
-        total_num_votes          -- an integer equal to the number of
-                                    ballots that were cast in this contest.
+        strata_pseudocounts      -- a list of lists, same shape as strata_sample_tallies.
+                                    i-th element gives pseudocounts for i-th stratum.
+
+        total_num_votes          -- a list whose i-th element is an integer 
+                                    equal to the number of ballots that were 
+                                    cast in this contest in the i-th stratum.
 
         seed                     -- an integer or None. Assuming that it 
                                     isn't None, we use it to seed the random 
                                     state for the audit.
 
-        vote_for_n               -- an integer, parsed from the command-line args. 
+        n_winners                -- an integer, parsed from the command-line args. 
                                     Its default value is 1, which means we only 
                                     calculate a single winner for the contest.
-                                    For other values n, we simulate the unnsampled 
+                                    For other values n_winners, we simulate the unnsampled 
                                     votes and define a win for choice i as any time 
-                                    they are in the top n choices in the final tally.
+                                    they are in the top n_winners choices in the final tally.
 
-        pseudocount_for_prior    -- an integer, defining how many votes we add
-                                    in by default, for each choice, as a prior. 
-                                    The default of 1 gives a uniform prior over 
-                                    all the choices that they each automatically
-                                    receive 1 vote.
-
-        pretty_print             -- a Boolean, which defaults to False.  When it's 
-                                    set to True, we print the winning candidate, 
-                                    the number of votes they have received and the 
-                                    final vote tally for all the candidates.
+        pretty_print             -- a Boolean, which defaults to False.  When it is
+                                    True, we print the winning choice,
+                                    the number of votes it received and the 
+                                    final vote tally for all the choices.
 
     Returns:
 
         winner                   -- an integer, representing the index of the 
-                                    candidate who won the election.
+                                    choice that won the contest.
     """
 
-    final_tallies = None
-    for i, sample_tally in enumerate(sample_tallies):   # loop over collections
+    final_tallies = np.zeros(len(all_choices))
+    for i in range(len(strata_sample_tallies)):
+        stratum_sample_tally = strata_sample_tallies[i]
+        stratum_pseudocounts = strata_pseudocounts[i]
+        stratum_size = total_num_votes[i]
         nonsample_tally = generate_nonsample_tally(
-            sample_tally, total_num_votes[i], seed, pseudocount_for_prior)
-        final_collection_tally = [sum(k)
-                              for k in zip(sample_tally, nonsample_tally)]
-        if final_tallies is None:
-            final_tallies = final_collection_tally
-        else:
-            final_tallies = [sum(k)
-                           for k in zip(final_tallies, final_collection_tally)]
+            stratum_sample_tally,
+            stratum_pseudocounts,
+            stratum_size,
+            seed)
+        final_collection_tally = sample_tally + nonsample_tally
+        final_tallies = final_tallies + final_collection_tally
     final_tallies = [(k, final_tallies[k]) for k in range(len(final_tallies))]
     final_tallies.sort(key = lambda x: x[1])
-    winners_with_tallies = final_tallies[-vote_for_n:]
+    winners_with_tallies = final_tallies[-n_winners:]
     winners = [winner_tally[0] for winner_tally in winners_with_tallies]
 
     if pretty_print:
         results_str = ''
         for i in range(len(winners)):
             results_str += (
-                "Candidate {} is a winner with {} votes. ".format(
-                winners[i], final_tallies[winners[i]][1]))
+                "Choice {} is a winner with {} votes. "
+                .format(winners[i], final_tallies[winners[i]][1]))
         results_str += (
-            "The final vote tally for all the candidates "
-            "was {}".format(
-                [final_tally[1] for final_tally in final_tallies]))
+            "The final vote tally for all the choices was {}"
+            .format([final_tally[1] for final_tally in final_tallies]))
         print(results_str)
 
     return winners
 
 
-def compute_win_probs(sample_tallies,
-                      collection_total_votes,
+def compute_win_probs(strata_sample_tallies,
+                      strata_pseudocounts,
+                      total_num_votes,
                       seed,
                       num_trials,
-                      candidate_names,
-                      vote_for_n):
+                      all_choices,
+                      n_winners):
     """
 
     Runs num_trials simulations of the Bayesian audit to estimate
@@ -796,33 +818,38 @@ def compute_win_probs(sample_tallies,
 
     Input Parameters:
 
-        sample_tallies         -- a list of lists. Each list represents 
+        strata_sample_tallies  -- a list of lists. Each list represents 
                                   the sample tally for a given collection. 
                                   So, sample_tallies[i] represents the 
                                   tally for collection i. Then, 
                                   sample_tallies[i][j] represents the 
                                   number of votes choice j receives in collection i.
 
+        strata_pseudocounts    -- an array of the same shape as strata_sample_tallies;
+                                  the i-th element of this array gives the Bayesian
+                                  prior in the form of pseudocounts.
+
         total_num_votes        -- an integer representing the number of
                                   ballots that were cast in this contest
 
         seed                   -- an integer or None. Assuming that it isn't 
-                                  None, we use it to seed the random state for the audit.
+                                  None, we use it to seed the random state 
+                                  for the audit.
 
         num_trials             -- an integer which represents how many simulations
                                   of the Bayesian audit trial we run, to estimate 
                                   the win probabilities of the candidates.
 
-        candidate_names        -- an ordered list of strings, containing 
-                                  the name of every candidate in the contest we are 
+        all_choices            -- an ordered list of strings, containing 
+                                  the name of every choice in the contest we are 
                                   auditing.
 
-        vote_for_n             -- an integer, parsed from the command-line args. 
+        n_winners              -- an integer, parsed from the command-line args. 
                                   Its default value is 1, which means we only 
                                   calculate a single winner for the contest.
-                                  For other values n, we simulate the unnsampled 
+                                  For other values of n_winners, we simulate the unnsampled 
                                   votes and define a win for candidate i as any 
-                                  time they are in the top n candidates in the final
+                                  time they are in the top n_winners candidates in the final
                                   tally.
 
     Returns:
@@ -833,17 +860,18 @@ def compute_win_probs(sample_tallies,
                                   out of the num_trials simulations.
     """
 
-    num_candidates = len(candidate_names)
-    win_count = [0]*(1+num_candidates)
+    win_count = np.zeros(1+len(all_choices))
     for i in range(num_trials):
         # We want a different seed per trial.
         # Adding i to seed caused correlations, as numpy apparently
         # adds one per trial, so we multiply i by 314...
         seed_i = seed + i*314159265
-        winners = compute_winner(sample_tallies,
-                                total_num_votes,
-                                vote_for_n,
-                                seed_i)
+        winners = compute_winner(strata_sample_tallies,
+                                 strata_pseudocounts,
+                                 total_num_votes,
+                                 seed_i,
+                                 n_winners
+                                )
         for winner in winners:
             win_count[winner+1] += 1
     win_probs = [(i, win_count[i]/float(num_trials))
@@ -855,33 +883,34 @@ def compute_win_probs(sample_tallies,
 ## Output routines
 ##############################################################################
 
-def print_results(candidate_names, win_probs, vote_for_n):
+def print_results(all_choices, win_probs, n_winners):
     """
-    Given list of candidate_names and win_probs pairs, print summary
+    Given list of all choices and win_probs pairs, print summary
     of the Bayesian audit simulations.
 
     Input Parameters:
 
-        candidate_names             -- an ordered list of strings, 
-                                       containing the name of every candidate 
-                                       in the contest we are auditing.
+        all_choices                 -- an ordered list of strings, 
+                                       containing the name of every choice
+                                       reported or seen in the contest 
+                                       we are auditing.
 
         win_probs                   -- a list of pairs (i, p) where p is 
                                        the fractional representation of the 
-                                       number of trials that candidate i has 
+                                       number of trials that choice i has 
                                        won out of the num_trials simulations.
 
-        vote_for_n                  -- an integer, parsed from the command-line args. 
+        n_winners                   -- an integer, parsed from the command-line args. 
                                        Its default value is 1, which means we only 
                                        calculate a single winner for the contest.
-                                       For other values n, we simulate the unnsampled 
-                                       votes and define a win for candidate i as any 
-                                       time they are in the top n candidates in the final
-                                       tally.
+                                       For other values of n_winners, we simulate the unnsampled 
+                                       votes and define a win for choice i as any 
+                                       time it is in the top n_winners candidates in 
+                                       the final tally.
 
     Returns:
 
-        None                        -- but prints a summary of how often each candidate 
+        None                        -- but prints a summary of how often each choice
                                        has won in the simulations.
     """
 
@@ -894,21 +923,21 @@ def print_results(candidate_names, win_probs, vote_for_n):
     else:
         sorted_win_probs = win_probs
 
-    if vote_for_n == 1:
+    if n_winners == 1:
         print("{:<24s} \t {:<s}"
-              .format("Candidate name",
+              .format("Choice        ",
                       "Estimated probability of winning a full recount"))
     else:
         print("{:<24s} \t {:<s} {} {:<s}"
-              .format("Candidate name",
-                      "Estimated probability of being among the top",
-                      vote_for_n,
-                      "winners in a full recount"))
+              .format("Choice        ",
+                      "Estimated probability of being among the top {} ",
+                      "winners in a full recount"
+                      .format(n_winners)))
 
-    for candidate_index, prob in sorted_win_probs:
-        candidate_name = str(candidate_names[candidate_index - 1])
+    for choice_index, prob in sorted_win_probs:
+        choice_name = str(all_choices[choice_index - 1])
         print(" {:<24s} \t  {:6.2f} %  "
-              .format(candidate_name, 100*prob))
+              .format(choice_name, 100*prob))
 
 
 
@@ -931,17 +960,43 @@ def main():
     all_choices, sample_dict = \
         read_and_process_sample(args.sample_file, collection_names, reported_choices)
 
+    # Stratify by (collection, choice) pairs
+    strata = []                 # list of (collection, reported_choice) pairs
+    strata_size = []            # corresponding list of # reported votes
+    for collection in collection_names:
+        for reported_choice in reported_choices:
+            stratum = (collection, reported_choice)
+            strata.append(stratum)
+            # Record stratum size (number of votes reported cast)
+            strata_size.append(reported_size[collection][reported_choice])
+
+    # create sample tallies for each strata
+    strata_sample_tallies = []
+    strata_pseudocounts = []
+    for (collection, reported_choice) in strata:
+        stratum_sample_tally = []
+        stratum_pseudocounts = []
+        for actual_choice in all_choices:
+            count = sample_dict[collection][reported_choice][actual_choice]
+            stratum_sample_tally.append(count)
+            if reported_choice == actual_choice:
+                stratum_pseudocounts.append(PSEUDOCOUNT_MATCH)
+            else:
+                stratum_pseudocounts.append(PSEUDOCOUNT_BASE)
+        strata_sample_tallies.append(stratum_sample_tally)
+        strata_pseudocounts.append(stratum_pseudocounts)
+        print(collection, reported_choice, stratum_sample_tally, stratum_pseudocounts)
+
     win_probs = compute_win_probs(\
-                    all_choices,                                 
-                    sample_tallies,
-                    collection_total_votes,
-                    collection_sample_votes,                                  
+                    strata_sample_tallies,
+                    strata_size,
                     args.audit_seed,
                     args.num_trials,
-                    args.vote_for_n
+                    all_choices,
+                    args.n_winners
                  )
 
-    print_results(candidate_names, win_probs, args.vote_for_n)
+    print_results(all_choices, win_probs, args.n_winners)
 
 
 if __name__ == '__main__':

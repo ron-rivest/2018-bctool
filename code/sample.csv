@@ -1,4 +1,4 @@
-        Collection,  Reported,  Actual,    Votes
+        Collection,  Reported,  Actual,    Votes,       Comment
         Bronx,       Yes,       Yes,         62
         Bronx,       No,        No,          21
         Bronx,       No,        Overvote,     1
