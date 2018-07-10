@@ -83,8 +83,8 @@ COLLECTIONS.CSV format:
     with one header line, as shown, then one data line for 
     each collection of paper ballots that may be sampled.
     Each data line gives the name of the collection and 
-    then the number of votes in that collection 
-    (that is, the number of paper ballots in the collection). 
+    then the number of cast votes in that collection 
+    (that is, the number of cast paper ballots in the collection). 
     An additional column for optional comments is provided.
 
 
@@ -122,7 +122,7 @@ REPORTED.CSV format
     For ballot-polling audits, use a reported choice of "-MISSING" 
     or "-noCVR" or any identifier starting with a "-".  (Tagging
     the identifier with an initial "-" prevents it from becoming
-    elegible for winning the contest.)
+    elegible for winning the contest.)  
 
 
 SAMPLE.CSV format:
@@ -150,10 +150,11 @@ SAMPLE.CSV format:
     that wasn't seen in the sample.
 
     If you give more than one data line for a given collection,
-    reported choice, and actual choice, then the votes are summed.
-    (So the mail-in collection has three ballots the scanner said
+    reported choice, and actual choice combination, then the votes 
+    are summed. (So the mail-in collection has three ballots the scanner said
     showed "No", but that the auditors said actually showed "Lizard
-    People".)
+    People".)  For example, you may give one line per audited ballot,
+    if you wish.
 
     The lines of this file do not need to be in any particular order.
     You can just add more lines to the end of this file as the audit
@@ -180,7 +181,8 @@ SAMPLE.CSV format:
     based on the sample data obtained so far.)
 
 
-There are optional parameters as well, to see their documentation, give command
+There are optional parameters as well, to see their documentation, 
+give command
 
     python bctool.py --h
 
@@ -191,13 +193,20 @@ to using a prior pseudocount of
 
     +50  for the (reported, actual) pair (R, A) of choices where R == A
 
+These default values may be changed via command-line options.
+
 This module can be used for ballot-polling audits too, if all
 reported votes are set to "-MISSING" (or some other value that
-starts with an initial "-").
+starts with an initial "-"; even just "-" will do).  For a
+hybrid audit where some collections have CVRs and some do not,
+it suffices to use the reported choice "-MISSING" for ballots
+in those collections not having CVRs, and to the available
+reported choice otherwise.
 
 
 If this module is imported by another python module, 
-rather than used stand-alone from the command line, then the procedure
+rather than used stand-alone from the command line, then 
+the procedure
 
     compute_win_probs
 
@@ -209,38 +218,27 @@ More description of Bayesian auditing methods can be found in:
 
     A Bayesian Method for Auditing Elections
     by Ronald L. Rivest and Emily Shen
-    EVN/WOTE'12 Proceedings
+    EVN/WOTE'12 Proceedings (2012)
     http://people.csail.mit.edu/rivest/pubs.html#RS12z
 
     Bayesian Tabulation Audits: Explained and Extended
     by Ronald L. Rivest 
-    2018
+    (2018)
     http://people.csail.mit.edu/rivest/pubs.html#Riv18a    
 
     Bayesian Election Audits in One Page
     by Ronald L. Rivest
-    2018
+    (2018)
     http://people.csail.mit.edu/rivest/pubs.html#Riv18b
 
 """
 
 import argparse
 
-from copy import deepcopy
 import csv
 import sys
 
 import numpy as np
-
-##############################################################################
-## Some global variables
-##############################################################################
-
-# Bayes prior hyperparameters (pseudocounts)
-# These are constants for now; perhaps allow setting via CLI later
-
-PSEUDOCOUNT_BASE = 1
-PSEUDOCOUNT_MATCH = 50
 
 
 ##############################################################################
@@ -396,6 +394,22 @@ def parse_args():
                              "estimates.",
                         type=int,
                         default=25000)
+
+    parser.add_argument("--pseudocount_base",
+                        help="The pseudocount value used for reported-choice/"
+                        "actual-choice pairs that are unequal.  The default "
+                        "value is 1, a relatively small value, indicating an "
+                        "expectation that scanner errors are rare.",
+                        type=int,
+                        default=1)
+
+    parser.add_argument("--pseudocount_match",
+                        help="The pseudocount value used for reported-choice/"
+                        "actual-choice pairs that are equal.  The default "
+                        "value is 50, a relatively large value, indicating an "
+                        "expectation that scanner is generally accurate.",
+                        type=int,
+                        default=50)
 
     parser.add_argument("--n_winners",
                         help="The parameter n_winners determines how many "
@@ -1033,9 +1047,9 @@ def main():
             count = sample_dict[collection][reported_choice][actual_choice]
             stratum_sample_tally.append(count)
             if reported_choice == actual_choice:
-                stratum_pseudocounts.append(PSEUDOCOUNT_MATCH)
+                stratum_pseudocounts.append(args.pseudocount_match)
             else:
-                stratum_pseudocounts.append(PSEUDOCOUNT_BASE)
+                stratum_pseudocounts.append(args.pseudocount_base)
         strata_sample_tallies.append(np.array(stratum_sample_tally))
         strata_pseudocounts.append(np.array(stratum_pseudocounts))
         # print(collection, reported_choice, stratum_sample_tally, stratum_pseudocounts)
