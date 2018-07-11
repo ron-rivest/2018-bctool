@@ -424,7 +424,7 @@ def parse_args():
                         type=int,
                         default=1)
 
-    parser.add_argument("--v",
+    parser.add_argument("--v", "--verbose",
                         help="Verbose output.",
                         action='store_true')
 
