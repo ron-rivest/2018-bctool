@@ -1,0 +1,5 @@
+        Collection,  Reported,  Actual,    Votes,       Comment
+        CVR,         A,         A,         253
+        CVR,         B,         B,         247
+        no-CVR,      -MISSING,  A,         510
+        no-CVR,      -MISSING,  B,         490
