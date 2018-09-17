@@ -1,0 +1,5 @@
+        Collection,  Reported,    Votes,       Comment
+        CVR,         A,           4550
+        CVR,         B,           4950
+        CVR,         -INVALID,    500
+        no-CVR,      -MISSING,    1000
