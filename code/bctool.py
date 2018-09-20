@@ -171,6 +171,38 @@ SAMPLE.CSV format:
     obtained from manually auditing a random sample of the paper
     ballots.
 
+[Optional:] MODEL.CSV format:
+
+    Example:
+
+        Collection,  Reported,  Actual,    Percentage,       Comment
+        Bronx,       Yes,       Yes,         95
+        Bronx,       Yes,       No,          5
+        Bronx,       No,        No,          100
+        Queens,      Yes,       Yes,         100
+        Queens,      No,        No,          100
+        Mail-In,     Yes,       Yes,         100      
+        Mail-In,     No,        No,          100
+
+    The model.csv file is used for work estimation. When we want to estimate
+    how long a Bayesian audit will take to complete, we can define a model
+    of what the rest of the votes will look like. In this case, we claim that
+    out of the reported votes for Yes, in Bronx, 95% of them will correspond
+    to an actual vote of Yes. 5% of the reported votes of Yes in Bronx will
+    correspond to an actual vote of No - this can be used to model human estimates
+    of how often a scanner, in the Bronx will make a mistake. In this example,
+    we assume that all the other possible pairings occur exactly as reported.
+
+    Using this model.csv file, we can estimate how much work remains in the
+    audit. We can scale up each reported votes stratum, according to its
+    sample size. Then, inside each stratum, we can model each (reported, actual)
+    vote pair, according to our defined model. We can calculate how much we
+    will need to increase our sample size by for our Bayesian risk limit
+    to be satisfied.
+
+    We can use the work estimation module, by passing in the flag --estimate_work=True,
+    and the path to the model file.
+
     It is assumed here that sampling is done without replacement.
 
     This module does not assume that each collection is sampled at the
@@ -238,6 +270,7 @@ More description of Bayesian auditing methods can be found in:
 
 import argparse
 
+import copy
 import csv
 import sys
 
@@ -381,6 +414,7 @@ def parse_args():
              "each collection in the audit sample.",
         default="sample.csv")
 
+
     # OPTIONAL COMMAND-LINE ARGUMENTS
 
     parser.add_argument("--audit_seed",
@@ -427,6 +461,36 @@ def parse_args():
     parser.add_argument("--v", "--verbose",
                         help="Verbose output.",
                         action='store_true')
+
+    parser.add_argument("--estimate_work",
+                        help="When we want to estimate how many more samples we will "
+                             "require before the risk limit will be satisfied "
+                             "we set this to be True.",
+                        type=bool,
+                        default=False)
+
+    parser.add_argument("--estimate_risk_limit",
+                        help="Risk limit, used in work estimation. We will continue "
+                             "to scale up the sample size, until this risk limit is satisfied.",
+                        type=float,
+                        default=0.05)
+
+    parser.add_argument("--scale_factor",
+                        help="When estimating work, we continuously scale up the sample size "
+                             "until the risk limit is satisfied. Scale factor represents the "
+                             "fraction by which we increase the sample size by, at each step. A "
+                             "scale factor of 0.1 (default) means the sample size increases by "
+                             "10% each time.",
+                        type=float,
+                        default=0.1)
+
+    parser.add_argument(
+        "--model_file",
+        help="path to CSV file giving number of times each "
+             "(reported choice, actual choice) pair was seen in "
+             "each collection in the audit sample. Only required "
+             "if estimate_work is set to be True",
+        default="model.csv")
 
     args = parser.parse_args()
 
@@ -654,6 +718,69 @@ def read_and_process_sample(path_to_sample_file,
 
     return actual_choices, sample_dict, sample_rows
 
+
+def read_and_process_model(path_to_model_file,
+                            collection_names,
+                            reported_choices):
+    """
+    Read model.csv file and process it.
+
+    Input:
+
+        path_to_model_file          -- (string) path to input model.csv
+
+        collection_names            -- list of collection names
+
+        reported_choices            -- list of reported choices
+                                       (from reported.csv)
+
+    Return:
+
+        model_dict                  --  nested mapping of dicts:
+                                        collection_name -> reported_choice ->
+                                        actual_choice -> percentage
+    """
+
+    model_rows = read_csv(path_to_model_file,
+                           ['collection', 'reported', 'actual', 'percentage',
+                            'comment'])
+    # collect all actual choices (including reported choices)
+    # allow -missing as an actual model choice, to simplify initialization
+    actual_choices = [choice for choice in reported_choices]
+    for row in model_rows:
+        actual_choice = row['actual']
+        if actual_choice not in actual_choices:
+            actual_choices.append(actual_choice)
+    actual_choices = sorted(actual_choices)
+
+    # Initialize sample dict
+    # for all possible collection, reported_choice, actual choice triples
+    # set counts to zero
+    model_dict = dict()
+    for collection in collection_names:
+        model_dict[collection] = dict()
+        for reported_choice in reported_choices:
+            model_dict[collection][reported_choice] = dict()
+            for actual_choice in actual_choices:
+                if actual_choice == reported_choice:
+                    model_dict[collection][reported_choice][actual_choice] = 100
+                else:
+                    model_dict[collection][reported_choice][actual_choice] = 0
+    for row in model_rows:
+        collection_name = row['collection']
+        assert collection_name in model_dict
+        collection_dict = model_dict[collection_name]
+        reported_choice = row['reported']
+        assert reported_choice in collection_dict
+        reported_dict = collection_dict[reported_choice]
+        actual_choice = row['actual']
+        reported_dict[actual_choice] += row['percentage'] 
+        reported_dict[reported_choice] -= row['percentage']
+
+    for collection in model_dict:
+        for reported_choice in model_dict[collection]:
+            assert(sum(model_dict[collection][reported_choice].values()) == 100)
+    return model_dict
 
 #
 # Main computational routines
@@ -947,9 +1074,167 @@ def compute_win_probs(strata_sample_tallies,
     return win_probs
 
 
+def estimate_work(strata_model_tallies, strata, strata_sample_tallies,
+            strata_pseudocounts, strata_size, audit_seed,
+            num_trials, actual_choices, n_winners, risk_limit,
+            scale_factor):
+    """
+
+    Runs num_trials simulations of the Bayesian audit to estimate
+    the work leftover.
+
+    In particular, we run a single simulation, with the current sample
+    tally to get the Bayesian risk of the sample. Then, if the sample
+    doesn't satisfy our risk limit, we scale each stratum size in our
+    sample tally by (1+scale_factor). Within each stratum, we assume
+    that the (reported, actual) vote pairs behave in the way that
+    was defined in the model.csv file - which is defined in strata_model_tallies
+    here.
+
+    Using this, we check if our sample tally satisfies our risk limit - if not,
+    we try multiplying by (1+2*scale_factor). We repeat this process until our risk
+    limit is satisfied. When our risk limit is satisfied for some candidate,
+    after multiplying each sample tally by (1+x*scale_factor), we return
+    our value for x, to estimate how much work is left in the audit.
+
+    Input Parameters:
+
+        strata_model_tallies   -- a list of lists, which follows the same
+                                  format as strata_sample_tallies. However, each
+                                  element, strata_model_tallies[i][j] represents
+                                  the percentage of votes that the actual vote j
+                                  would receive, given that the reported vote is
+                                  the (collection, reported) pair represented by
+                                  strata[i].
+
+        strata                 -- a list of tuples. Each element in strata is a tuple
+                                  of the form (collection, reported_vote)
+
+        strata_sample_tallies  -- a list of lists. Each list represents
+                                  the sample tally for a given collection.
+                                  So, sample_tallies[i] represents the
+                                  tally for collection i. Then,
+                                  sample_tallies[i][j] represents the
+                                  number of votes choice j receives in
+                                  collection i.
+
+        strata_pseudocounts    -- an array of the same shape as
+                                  strata_sample_tallies;
+                                  the i-th element of this array gives
+                                  the Bayesian prior in the form of
+                                  pseudocounts.
+
+        strata_size            -- a list of integers, where each integer represents
+                                  the number of votes in a given stratum.
+
+        audit_seed             -- an integer or None. Assuming that it isn't
+                                  None, we use it to seed the random state
+                                  for the audit.
+
+        num_trials             -- an integer which represents how many
+                                  simulations of the Bayesian audit trial
+                                  we run to estimate the win probabilities
+                                  of the choices.
+
+        actual_choices         -- an ordered list of strings, containing
+                                  the name of every choice in the contest
+                                  being audited.
+
+        n_winners              -- an integer, parsed from the command-line
+                                  args. Its default value is 1, which means
+                                  we only calculate a single winner for the
+                                  contest.
+                                  For other values of n_winners, we simulate
+                                  the unnsampled votes and define a win for
+                                  choice i as any time they are in the top
+                                  n_winners choices in the final tally.
+
+        risk_limit             -- a float, representing the ideal risk limit.
+                                  We stop our work estimation procedure, when
+                                  our sample size will satisfy this risk limit.
+
+        scale_factor           -- a float, representing the rate at which we increase
+                                  our sample size. If it's set to 0.1, then in each
+                                  iteration of our work estimation, we increase our
+                                  overall sample size by 10%.
+
+    Returns:
+
+        sample_size_increase   -- An integer, representing the required increase in sample
+                                  size, to satisfy our Bayesian risk limit.
+
+    """
+    current_win_probs = compute_win_probs(
+                    strata_sample_tallies,
+                    strata_pseudocounts,
+                    strata_size,
+                    audit_seed,
+                    num_trials,
+                    actual_choices,
+                    n_winners)
+    current_win_probs = [k[1] for k in current_win_probs]
+    stratified_sample_sizes = [sum(sample_tally) for sample_tally in strata_sample_tallies]
+    total_sample_size = sum(stratified_sample_sizes)
+    total_strata_size = sum(strata_size)
+    scale_increase = 0
+    sample_size_increase = 0
+
+    if max(current_win_probs) >= (1.0 - risk_limit):
+        return sample_size_increase
+
+    matched = (max(current_win_probs) >= (1.0 - risk_limit))
+    while not matched:
+        scale_increase += 1
+        new_scale = scale_increase*scale_factor
+        sample_size_increase = new_scale*total_sample_size
+
+        updated_sample_tallies = copy.deepcopy(strata_sample_tallies)
+
+        for i, (collection, reported_choice) in enumerate(strata):
+            strata_sample_size_increase = sample_size_increase * strata_size[i] / total_strata_size
+            for j in range(len(updated_sample_tallies[i])):
+                new_sample_size = (updated_sample_tallies[i][j] + strata_sample_size_increase * 
+                    strata_model_tallies[i][j] / 100.00)
+
+                # If we can't update the sample tally without going over the strata size, then
+                # don't update the sample tally.
+                if sum(updated_sample_tallies[i]) + new_sample_size <= strata_size[i]:
+                    updated_sample_tallies[i][j] = new_sample_size
+
+        current_win_probs = compute_win_probs(
+                    updated_sample_tallies,
+                    strata_pseudocounts,
+                    strata_size,
+                    audit_seed,
+                    num_trials,
+                    actual_choices,
+                    n_winners)
+        current_win_probs = [k[1] for k in current_win_probs]
+        matched = (max(current_win_probs) >= (1.0 - risk_limit))
+    return sample_size_increase
+
 #
 # Output routines
 #
+
+def print_work_estimate_results(sample_size_increase, risk_limit):
+    """
+    Input Parameters:
+
+    sample_size_increase   -- An integer, representing the required increase in sample
+                              size, to satisfy our Bayesian risk limit, according to our
+                              work estimation procedure.
+
+    Returns:
+
+        None               -- Prints the results of the work estimation procedure.
+    """
+    print("If the newly sampled votes follow the distribution described in "
+          "our model file, then we will require {} more votes to satisfy "
+          "our risk limit of {}.".format(
+            sample_size_increase,
+            risk_limit))
+
 
 def print_results(actual_choices, win_probs, n_winners):
     """
@@ -1049,12 +1334,17 @@ def main():
         read_and_process_sample(args.sample_file,
                                 collection_names,
                                 reported_choices)
+    if args.estimate_work:
+        model_dict = read_and_process_model(args.model_file,
+                                            collection_names,
+                                            reported_choices)
 
     if args.v:
         print("All reported choices and choices seen in audit: ",
               actual_choices)
         for row in sample_rows:
             print("    ", row)
+
 
     # Stratify by (collection, choice) pairs
     strata = []                 # list of (collection, reported_choice) pairs
@@ -1067,22 +1357,30 @@ def main():
             strata_size.append(reported_size[collection][reported_choice])
 
     # create sample tallies for each strata
+    if args.estimate_work:
+        strata_model_tallies = []
     strata_sample_tallies = []
     strata_pseudocounts = []
     for (collection, reported_choice) in strata:
         stratum_sample_tally = []
         stratum_pseudocounts = []
+        if args.estimate_work:
+            stratum_model_tally = []
         for actual_choice in actual_choices:
             count = sample_dict[collection][reported_choice][actual_choice]
             stratum_sample_tally.append(count)
+            if args.estimate_work:
+                if actual_choice not in model_dict[collection][reported_choice]:
+                    model_dict[collection][reported_choice][actual_choice] = 0
+                stratum_model_tally.append(model_dict[collection][reported_choice][actual_choice])
             if reported_choice == actual_choice:
                 stratum_pseudocounts.append(args.pseudocount_match)
             else:
                 stratum_pseudocounts.append(args.pseudocount_base)
         strata_sample_tallies.append(np.array(stratum_sample_tally))
         strata_pseudocounts.append(np.array(stratum_pseudocounts))
-        # print(collection, reported_choice,
-        #       stratum_sample_tally, stratum_pseudocounts)
+        if args.estimate_work:
+            strata_model_tallies.append(np.array(stratum_model_tally))
 
     win_probs = compute_win_probs(
                     strata_sample_tallies,
@@ -1095,6 +1393,14 @@ def main():
 
     print_results(actual_choices, win_probs, args.n_winners)
 
+    if args.estimate_work:
+        sample_size_increase = estimate_work(
+            strata_model_tallies, strata, strata_sample_tallies,
+            strata_pseudocounts, strata_size, args.audit_seed,
+            args.num_trials, actual_choices, args.n_winners,
+            args.estimate_risk_limit, args.scale_factor)
+
+        print_work_estimate_results(sample_size_increase, args.estimate_risk_limit)
 
 if __name__ == '__main__':
 
