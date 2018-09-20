@@ -1,0 +1,8 @@
+        Collection,  Reported,  Actual,    Percentage,       Comment
+        Bronx,       Yes,       Yes,         95
+        Bronx,       Yes,       No,          5
+        Bronx,       No,        No,          100
+        Queens,      Yes,       Yes,         100
+        Queens,      No,        No,          100
+        Mail-In,     Yes,       Yes,         100      
+        Mail-In,     No,        No,          100

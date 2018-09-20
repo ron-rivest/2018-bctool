@@ -164,6 +164,38 @@ SAMPLE.CSV format:
     obtained from manually auditing a random sample of the paper
     ballots.
 
+[Optional:] MODEL.CSV format:
+
+    Example:
+
+        Collection,  Reported,  Actual,    Percentage,       Comment
+        Bronx,       Yes,       Yes,         95
+        Bronx,       Yes,       No,          5
+        Bronx,       No,        No,          100
+        Queens,      Yes,       Yes,         100
+        Queens,      No,        No,          100
+        Mail-In,     Yes,       Yes,         100      
+        Mail-In,     No,        No,          100
+
+    The model.csv file is used for work estimation. When we want to estimate
+    how long a Bayesian audit will take to complete, we can define a model
+    of what the rest of the votes will look like. In this case, we claim that
+    out of the reported votes for Yes, in Bronx, 95% of them will correspond
+    to an actual vote of Yes. 5% of the reported votes of Yes in Bronx will
+    correspond to an actual vote of No - this can be used to model human estimates
+    of how often a scanner, in the Bronx will make a mistake. In this example,
+    we assume that all the other possible pairings occur exactly as reported.
+
+    Using this model.csv file, we can estimate how much work remains in the
+    audit. We can scale up each reported votes stratum, according to its
+    sample size. Then, inside each stratum, we can model each (reported, actual)
+    vote pair, according to our defined model. We can calculate how much we
+    will need to increase our sample size by for our Bayesian risk limit
+    to be satisfied.
+
+    We can use the work estimation module, by passing in the flag --estimate_work=True,
+    and the path to the model file.
+
     It is assumed here that sampling is done without replacement.
 
     This module does not assume that each collection is sampled at the
