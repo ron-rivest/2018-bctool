@@ -116,7 +116,7 @@ class BCToolPage:
             </p>
 
 
-            <form action="Query" method="post" enctype="multipart/form-data">
+            <form action="ComparisonAudit" method="post" enctype="multipart/form-data">
 
             <h2>Step 1: Upload Collections File</h2>
 
@@ -385,7 +385,7 @@ class BCToolPage:
             '''
 
     @cherrypy.expose
-    def Query(
+    def ComparisonAudit(
         self, collections, reported_votes, sample, seed, num_trials):
 
         if seed == '':
