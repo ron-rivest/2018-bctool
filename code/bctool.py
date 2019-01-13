@@ -320,7 +320,9 @@ def convert_int_to_32_bit_numpy_array(v):
         v_parts.append(v % radix)
         v = v // radix
     # note: v_parts will be empty list if v==0, that is OK
-    return np.array(v_parts, dtype=int)
+    # note: integrating the fix from BPTool to change type to int64
+    # so that this code also works on Windows systems.
+    return np.array(v_parts, dtype=np.int64)
 
 
 def create_rs(seed):
